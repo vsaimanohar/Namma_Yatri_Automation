@@ -1,0 +1,83 @@
+name: Android CI with Maven
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Appium
+        run: |
+          npm install -g appium
+          appium --version
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Prepare Android Emulator
+        run: |
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-30" "emulator"
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "system-images;android-30;google_apis;x86_64"
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager list device
+          echo "Creating emulator 1"
+          echo "no" | ${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager create avd -n test_emulator1 -k "system-images;android-30;google_apis;x86_64"
+          echo "Creating emulator 2"
+          echo "no" | ${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager create avd -n test_emulator2 -k "system-images;android-30;google_apis;x86_64"
+      - name: Start Emulator
+        run: |
+          ${ANDROID_HOME}/emulator/emulator -avd test_emulator1 \
+            -no-snapshot-load \
+            -no-window \
+            -gpu on \
+            -no-boot-anim \
+            -wipe-data &
+          ${ANDROID_HOME}/emulator/emulator -avd test_emulator2 \
+            -no-snapshot-load \
+            -no-window \
+            -gpu on \
+            -no-boot-anim \
+            -wipe-data &
+      - name: Wait for Emulators
+        timeout-minutes: 180
+        run: |
+          # Get serial numbers
+          emulator1_serial=$(emulator -list-avds | grep test_emulator1 | sed 's/name:.*id:\s*//' | tr -d '\r')
+          emulator2_serial=$(emulator -list-avds | grep test_emulator2 | sed 's/name:.*id:\s*//' | tr -d '\r')
+          # Function to check if emulator is ready
+          check_emulator_ready() {
+            local serial=$1
+            adb -s $serial wait-for-device
+            adb -s $serial shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
+            adb -s $serial shell settings put global window_animation_scale 0
+            adb -s $serial shell settings put global transition_animation_scale 0
+            adb -s $serial shell settings put global animator_duration_scale 0
+            echo "Emulator $serial is ready"
+          }
+          # Wait for both emulators in parallel
+          check_emulator_ready $emulator1_serial &
+          check_emulator_ready $emulator2_serial &
+          wait # Wait for both processes to complete
+          adb devices
+      - name: Run Tests
+        run: |
+          appium & sleep 5
+          mvn test -DsuiteXmlFile=nammaYatriDependentFlows/AutoAssignRideFlow.xml
