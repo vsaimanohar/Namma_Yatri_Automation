@@ -64,13 +64,11 @@ public class BaseClass {
 				System.out.println("Setting the capabilities of the Driver Application and Driver app Installation is in Progress");
 				DesiredCapabilities cap = new DesiredCapabilities();
 				cap.setCapability("platformName", "Android");
-				cap.setCapability("platformVersion", "13");
+				cap.setCapability("platformVersion", "29");
 				cap.setCapability("udid", driverUdid);
 				cap.setCapability("automationName", "UiAutomator2");
 				cap.setCapability("newCommandTimeout", 300);
-				cap.setCapability("appPackage", ConfigLoader.getProperty(driverApp + ".appPackage"));
-				cap.setCapability("appActivity", ConfigLoader.getProperty(driverApp + ".appActivity"));
-				cap.setCapability("noReset", true);//debug
+				cap.setCapability("uiautomator2ServerLaunchTimeout", 600000);
 				//cap.setCapability("app", System.getProperty("user.dir") + "/movingTech.NY/Resources/app-nyDriver-prod-debug.apk");
 				driver = new AndroidDriver(url, cap);
 				implicitWaitMethod(driver,60);
@@ -82,13 +80,11 @@ public class BaseClass {
 				System.out.println("Setting the capabilities of the User Application and User app Installation is in Progress");
 				DesiredCapabilities cap1 = new DesiredCapabilities();
 				cap1.setCapability("platformName", "Android");
-				cap1.setCapability("platformVersion", "13");
+				cap1.setCapability("platformVersion", "29");
 				cap1.setCapability("udid", userUdid);
 				cap1.setCapability("automationName", "UiAutomator2");
 				cap1.setCapability("newCommandTimeout", 300);
-				cap1.setCapability("appPackage", ConfigLoader.getProperty(userApp + ".appPackage"));
-			    cap1.setCapability("appActivity",ConfigLoader.getProperty(userApp + ".appActivity"));
-				cap1.setCapability("noReset", true);
+				cap1.setCapability("uiautomator2ServerLaunchTimeout", 600000);
 //         		cap1.setCapability("app", System.getProperty("user.dir") + "/movingTech.NY/Resources/driver-2-sept-master.apk");//Driver apk path
 				driver1 = new AndroidDriver(url, cap1);
 				implicitWaitMethod(driver1,100);

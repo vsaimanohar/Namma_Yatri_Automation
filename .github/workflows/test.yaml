@@ -1,0 +1,171 @@
+name: Android CI with Maven
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-13
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Install Appium and Drivers
+        run: |
+          npm install -g appium
+          appium --version
+          appium driver install uiautomator2
+          appium driver list
+          
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+            
+      - name: Cache Emulator
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ runner.os }}
+            
+      - name: Prepare Android Emulator
+        run: |
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-29" "emulator"
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "system-images;android-29;google_apis;x86"
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager list device
+          echo "Creating emulator 1"
+          echo "no" | ${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager create avd -n test_emulator1 -k "system-images;android-29;google_apis;x86" -d "pixel_2"
+          echo "Creating emulator 2"
+          echo "no" | ${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager create avd -n test_emulator2 -k "system-images;android-29;google_apis;x86" -d "pixel_2"
+
+      - name: Configure Emulators
+        run: |
+          for avd in test_emulator1 test_emulator2; do
+            echo "hw.lcd.density=420" >> ~/.android/avd/$avd.avd/config.ini
+            echo "hw.lcd.height=1920" >> ~/.android/avd/$avd.avd/config.ini
+            echo "hw.lcd.width=1080" >> ~/.android/avd/$avd.avd/config.ini
+            echo "hw.ramSize=2048" >> ~/.android/avd/$avd.avd/config.ini
+            echo "disk.dataPartition.size=2048M" >> ~/.android/avd/$avd.avd/config.ini
+            echo "hw.cpu.ncore=2" >> ~/.android/avd/$avd.avd/config.ini
+          done
+
+      - name: Verify Hardware Acceleration
+        run: |
+          ${ANDROID_HOME}/emulator/emulator-check accel
+          
+      - name: Start Emulators
+        run: |
+          for avd in test_emulator1 test_emulator2; do
+            ${ANDROID_HOME}/emulator/emulator -avd $avd \
+              -no-snapshot-load \
+              -no-window \
+              -gpu swiftshader_indirect \
+              -no-boot-anim \
+              -no-audio \
+              -no-snapshot \
+              -camera-back none \
+              -camera-front none \
+              -memory 2048 \
+              -cores 2 \
+              -accel on \
+              -wipe-data &
+          done
+            
+      - name: Wait for Emulators
+        timeout-minutes: 20
+        run: |
+          # Wait for ADB to start
+          adb start-server
+          sleep 5
+          
+          # Wait for both emulators to appear in adb devices
+          max_attempts=30
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            device_count=$(adb devices | grep -c emulator)
+            if [ $device_count -eq 2 ]; then
+              echo "Both emulators are detected"
+              break
+            fi
+            echo "Waiting for emulators to be detected (attempt $attempt)... Found $device_count"
+            sleep 10
+            attempt=$((attempt + 1))
+          done
+          if [ $device_count -ne 2 ]; then
+            echo "Failed to detect both emulators"
+            exit 1
+          fi
+          # Get both emulator serials
+          emulator_serials=($(adb devices | grep emulator | awk '{print $1}'))
+          
+          # Function to wait for an emulator
+          wait_for_emulator() {
+            local avd=$1
+            local serial=$2
+            
+            echo "Waiting for $avd (serial: $serial)"
+            
+            # Wait for device
+            adb -s $serial wait-for-device
+            
+            # Wait for boot completion
+            while [[ -z $(adb -s $serial shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') ]]; do
+              echo "Waiting for boot completion..."
+              sleep 2
+            done
+            
+            # Disable animations
+            adb -s $serial shell settings put global window_animation_scale 0
+            adb -s $serial shell settings put global transition_animation_scale 0
+            adb -s $serial shell settings put global animator_duration_scale 0
+            
+            # Verify device is ready
+            adb -s $serial shell input keyevent 82
+            echo "$avd is ready (serial: $serial)"
+          }
+          
+          # Wait for each emulator using their specific serial numbers
+          wait_for_emulator test_emulator1 "${emulator_serials[0]}"
+          wait_for_emulator test_emulator2 "${emulator_serials[1]}"
+          
+          # Show final device list
+          echo "Final device list:"
+          adb devices
+          
+      - name: Start Appium Server
+        run: |
+          appium --log appium.log --relaxed-security --base-path /wd/hub &
+          sleep 10
+          
+          # Check if Appium is running properly
+          response=$(curl --silent http://localhost:4723/wd/hub/status)
+          echo "Appium server response: $response"
+          
+          if [[ $response != *"ready"* ]]; then
+            echo "Appium server not running properly"
+            cat appium.log
+            exit 1
+          fi
+      - name: Run Tests
+        run: |
+          mvn test -DsuiteXmlFile=nammaYatriDependentFlows/AutoAssignRideFlow.xml
